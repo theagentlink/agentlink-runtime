@@ -1,0 +1,19 @@
+# Secrets — never commit these
+.env
+
+# Runtime state
+state.json
+resume.log
+
+# Dependencies
+node_modules/
+__pycache__/
+
+# Keys
+*.key
+*.pem
+*.secret
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,16 @@
+{
+  "name": "agentlink-mcp-signer",
+  "version": "1.0.0",
+  "description": "Local MCP server for AgentLink agent signing — private key never leaves this process",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "tweetnacl": "^1.0.3",
+    "bs58": "^5.0.0",
+    "uuid": "^9.0.0",
+    "dotenv": "^16.0.0"
+  }
+}

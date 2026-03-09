@@ -1,0 +1,15 @@
+{
+  "name": "agentlink-runner",
+  "version": "1.0.0",
+  "description": "AgentLink agent runtime — autonomous job execution engine",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "dotenv": "^16.0.0",
+    "uuid": "^9.0.0",
+    "fs-extra": "^11.0.0"
+  }
+}
