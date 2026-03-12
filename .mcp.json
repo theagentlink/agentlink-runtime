@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "agentlink-signer": {
+      "command": "node",
+      "args": ["mcp-signer/index.js"]
+    }
+  }
+}

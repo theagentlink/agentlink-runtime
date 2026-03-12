@@ -7,12 +7,13 @@
  * ⚠️  ANTHROPIC_API_KEY is NOT used or read in this file.
  */
 
-const { execSync } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
 const STATE_PATH = path.join(__dirname, '../state.json');
 const SKILL_PATH = path.join(__dirname, '../SKILL.md');
+const LOG_PATH = path.join(__dirname, '../resume.log');
 
 function readState() {
   try {
@@ -40,7 +41,43 @@ function updateState(patch) {
 
 function log(level, message) {
   const ts = new Date().toISOString();
-  console.log(`[${ts}] [${level.toUpperCase()}] ${message}`);
+  const line = `[${ts}] [${level.toUpperCase()}] ${message}`;
+  console.log(line);
+  fs.appendFileSync(LOG_PATH, line + '\n');
+}
+
+function handleStreamEvent(event) {
+  try {
+    const ev = JSON.parse(event);
+
+    // Print assistant text content live
+    if (ev.type === 'assistant') {
+      const content = ev.message?.content || [];
+      for (const block of content) {
+        if (block.type === 'text' && block.text) {
+          process.stdout.write(block.text);
+          fs.appendFileSync(LOG_PATH, block.text);
+        } else if (block.type === 'tool_use') {
+          const line = `\n[TOOL] ${block.name}`;
+          process.stdout.write(line + '\n');
+          fs.appendFileSync(LOG_PATH, line + '\n');
+        }
+      }
+    }
+
+    // Partial streaming text
+    if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+      process.stdout.write(ev.delta.text);
+      fs.appendFileSync(LOG_PATH, ev.delta.text);
+    }
+
+  } catch {
+    // Not JSON — print as-is
+    if (event.trim()) {
+      process.stdout.write(event + '\n');
+      fs.appendFileSync(LOG_PATH, event + '\n');
+    }
+  }
 }
 
 function run() {
@@ -49,77 +86,104 @@ function run() {
   log('info', 'Starting subscription mode executor');
   log('info', 'Using Claude Code CLI (claude command)');
 
-  // Escape the skill content for shell usage
-  const escapedSkill = skillContent
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/`/g, '\\`')
-    .replace(/\$/g, '\\$');
-
-  try {
-    const result = execSync(
-      `claude --print "${escapedSkill}"`,
+  return new Promise((resolve) => {
+    const child = spawn(
+      'claude',
+      [
+        '--print',
+        '--output-format', 'stream-json',
+        '--include-partial-messages',
+        '--dangerously-skip-permissions',
+        skillContent
+      ],
       {
-        timeout: 300000, // 5 minutes
-        encoding: 'utf8',
         cwd: path.join(__dirname, '..'),
-        env: { ...process.env }
+        env: { ...process.env, ANTHROPIC_API_KEY: undefined },
+        stdio: ['ignore', 'pipe', 'pipe']
       }
     );
 
-    log('success', 'Claude Code run completed successfully');
-    if (result) {
-      console.log(result.toString());
-    }
+    let stderr = '';
+    let buffer = '';
 
-    updateState({ limitHitAt: null });
-    log('info', 'Cleared limitHitAt — ready for next run');
+    // Timeout after 59 minutes
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+    }, 3540000);
 
-  } catch (error) {
-    const output = (error.stdout || '').toString();
-    const stderr = (error.stderr || '').toString();
-    const combined = output + stderr;
+    child.stdout.on('data', (chunk) => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // keep incomplete line
+      for (const line of lines) {
+        handleStreamEvent(line);
+      }
+    });
 
-    // Check for rate/usage limit signals
-    const isLimitHit = (
-      combined.toLowerCase().includes('rate limit') ||
-      combined.toLowerCase().includes('usage limit') ||
-      combined.toLowerCase().includes('exceeded') ||
-      combined.toLowerCase().includes('quota')
-    );
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
 
-    if (isLimitHit) {
-      log('warn', 'Subscription limit hit — will retry in 1 hour');
-      updateState({ limitHitAt: Date.now() });
-      process.exit(0); // Clean exit — cron will retry
-      return;
-    }
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
 
-    // Timeout
-    if (error.signal === 'SIGTERM' || error.code === 'ETIMEDOUT') {
-      log('warn', 'Execution timed out — saving checkpoint');
-      const state = readState();
-      // Mark any in-progress jobs with timeout checkpoint
-      for (const [jobId, job] of Object.entries(state.jobs)) {
-        if (job.status === 'IN_PROGRESS') {
-          state.jobs[jobId] = {
-            ...job,
-            checkpoint: 'timeout — resume from last known step',
-            timedOutAt: Date.now()
-          };
+      // Flush any remaining buffer
+      if (buffer.trim()) handleStreamEvent(buffer);
+
+      process.stdout.write('\n');
+
+      const combined = stderr;
+
+      if (signal === 'SIGTERM') {
+        log('warn', 'Execution timed out — saving checkpoint');
+        const state = readState();
+        for (const [jobId, job] of Object.entries(state.jobs)) {
+          if (job.status === 'IN_PROGRESS') {
+            state.jobs[jobId] = {
+              ...job,
+              checkpoint: 'timeout — resume from last known step',
+              timedOutAt: Date.now()
+            };
+          }
         }
+        writeState(state);
+        resolve(0);
+        return;
       }
-      writeState(state);
-      process.exit(0);
-      return;
-    }
 
-    // Unknown error
-    log('error', `Unexpected error: ${error.message}`);
-    if (output) log('error', `stdout: ${output.slice(0, 500)}`);
-    if (stderr) log('error', `stderr: ${stderr.slice(0, 500)}`);
-    process.exit(1);
-  }
+      const isLimitHit = (
+        combined.toLowerCase().includes('rate limit') ||
+        combined.toLowerCase().includes('usage limit') ||
+        combined.toLowerCase().includes('exceeded') ||
+        combined.toLowerCase().includes('quota')
+      );
+
+      if (isLimitHit) {
+        log('warn', 'Subscription limit hit — will retry in 1 hour');
+        updateState({ limitHitAt: Date.now() });
+        resolve(0);
+        return;
+      }
+
+      if (code === 0) {
+        log('success', 'Claude Code run completed successfully');
+        updateState({ limitHitAt: null });
+        log('info', 'Cleared limitHitAt — ready for next run');
+        resolve(0);
+        return;
+      }
+
+      log('error', `Unexpected error: exit code ${code}`);
+      if (stderr) log('error', `stderr: ${stderr.slice(0, 500)}`);
+      resolve(1);
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      log('error', `Failed to start claude: ${err.message}`);
+      resolve(1);
+    });
+  });
 }
 
 module.exports = { run };

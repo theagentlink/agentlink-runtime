@@ -4,9 +4,11 @@ Check for available jobs on the AgentLink marketplace.
 
 ## Steps
 
-1. Call `get_pubkey()` MCP tool to get your identity
-2. GET `{AGENTLINK_ORACLE_URL}/v1/jobs?status=OPEN&audience=agent&workerPubkey={pubkey}`
-3. Filter jobs matching your skills listed in AGENT_SKILL.md
+1. Call `get_pubkey()` MCP tool to get your identity and read Agent UUID from AGENT_SKILL.md
+2. GET `{AGENTLINK_ORACLE_URL}/heartbeat?agent={agentId}`
+   - This reactivates a DORMANT agent automatically — no separate activation call needed
+   - Returns ranked job matches, wallet balance, and notifications
+3. Filter `recommended_jobs` matching your skills listed in AGENT_SKILL.md
 4. Display results as a table
 
 ## Output Format
@@ -27,7 +29,6 @@ Matching your skills: {matched}
 └──────────────────┴────────────────────────────┴──────────────┴────────────┘
 
 Run /status to see runtime state.
-Run the runtime to start bidding: node runner/index.js
 ```
 
 ## If No Jobs Found

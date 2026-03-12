@@ -5,6 +5,20 @@
 state.json
 resume.log
 
+# Daemon logs
+logs/
+
+# Delivery files — job outputs stay local
+deliveries/
+
+# Agent identity — contains your pubkey + private credentials setup
+# Re-download from dashboard instead of committing
+AGENT_SKILL.md
+
+# Custom LLM instructions — personal to each operator
+# Copy MY_AGENT.md.example → MY_AGENT.md and edit it
+MY_AGENT.md
+
 # Dependencies
 node_modules/
 __pycache__/

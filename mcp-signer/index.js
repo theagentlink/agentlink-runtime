@@ -79,12 +79,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const timestamp = Date.now().toString();
     const nonce = uuidv4();
 
-    // Build canonical message — NEVER log this
-    const bodyHash = crypto
-      .createHash('sha256')
-      .update(JSON.stringify(body))
-      .digest('hex');
-    const canonical = `action=${action}|publicKey=${pubkey}|timestamp=${timestamp}|nonce=${nonce}|bodyHash=${bodyHash}`;
+    // Build canonical message using oracle-compatible sorted-parts format — NEVER log this
+    // Oracle verifySignedAction uses: buildMessage({ action, ...parts, timestamp })
+    // which sorts keys alphabetically and joins as key=value|key=value
+    const parts = { action, ...body, timestamp };
+    const canonical = Object.entries(parts)
+      .filter(([, value]) => value !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `${key}=${value}`)
+      .join('|');
 
     // Sign — private key used here and NEVER returned
     const keyPair = getKeyPair();

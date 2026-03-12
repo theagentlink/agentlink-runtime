@@ -1,11 +1,11 @@
 /**
- * AgentLink Runner — API Mode Executor
+ * AgentLink Runner — OpenAI API Mode Executor
  *
- * Uses the Anthropic API directly for true 24/7 operation.
- * Reads ANTHROPIC_API_KEY from .env — key NEVER enters Claude's context.
+ * Uses the OpenAI API for true 24/7 operation.
+ * Reads OPENAI_API_KEY from .env — key NEVER enters the model's context.
  *
  * ⚠️  SECURITY: API key is used to initialize the client only.
- *     It is NEVER passed to Claude or logged anywhere.
+ *     It is NEVER passed to the model or logged anywhere.
  */
 
 const fs = require('fs');
@@ -90,7 +90,6 @@ function signFields(fields) {
     .map(([k, v]) => `${k}=${v}`)
     .join('|');
 
-  // ⚠️  Private key read here — NEVER returned or logged
   const privateKeyBase58 = process.env.AGENT_PRIVATE_KEY;
   if (!privateKeyBase58) throw new Error('AGENT_PRIVATE_KEY not set');
 
@@ -101,10 +100,10 @@ function signFields(fields) {
 
   const signatureBytes = nacl.sign.detached(Buffer.from(canonical, 'utf8'), keyPair.secretKey);
   log('info', `Signed: ${canonical}`);
-  return { signature: bs58.encode(signatureBytes), timestamp, nonce };
+  return { signature: bs58.encode(signatureBytes), timestamp, nonce, workerPubkey: fields.worker };
 }
 
-async function callMcpTool(toolName, toolArgs) {
+async function callTool(toolName, toolArgs) {
   const { v4: uuidv4 } = require('uuid');
   const workerPubkey = process.env.AGENT_PUBKEY;
 
@@ -112,31 +111,31 @@ async function callMcpTool(toolName, toolArgs) {
   if (toolName === 'sign_bid') {
     const { jobId, amount } = toolArgs;
     validateUuid(jobId, 'jobId');
-    return { ...signFields({ action: 'bid', worker: workerPubkey, jobId, amount: Number(amount) }), workerPubkey };
+    return signFields({ action: 'bid', worker: workerPubkey, jobId, amount: Number(amount) });
   }
 
   if (toolName === 'sign_acknowledge_job') {
     const { jobId } = toolArgs;
     validateUuid(jobId, 'jobId');
-    return { ...signFields({ action: 'acknowledge_job', worker: workerPubkey, jobId }), workerPubkey };
+    return signFields({ action: 'acknowledge_job', worker: workerPubkey, jobId });
   }
 
   if (toolName === 'sign_execution_event') {
     const { jobId, runId, state } = toolArgs;
     validateUuid(jobId, 'jobId');
-    return { ...signFields({ action: 'execution_event', worker: workerPubkey, jobId, runId, state }), workerPubkey };
+    return signFields({ action: 'execution_event', worker: workerPubkey, jobId, runId, state });
   }
 
   if (toolName === 'sign_deliver') {
     const { jobId, url } = toolArgs;
     validateUuid(jobId, 'jobId');
-    return { ...signFields({ action: 'deliver', worker: workerPubkey, jobId, url }), workerPubkey };
+    return signFields({ action: 'deliver', worker: workerPubkey, jobId, url });
   }
 
   if (toolName === 'sign_request_delivery_repo') {
     const { jobId } = toolArgs;
     validateUuid(jobId, 'jobId');
-    return { ...signFields({ action: 'request_delivery_repo', worker: workerPubkey, jobId }), workerPubkey };
+    return signFields({ action: 'request_delivery_repo', worker: workerPubkey, jobId });
   }
 
   if (toolName === 'upload_to_repo') {
@@ -310,7 +309,7 @@ async function callMcpTool(toolName, toolArgs) {
   }
 
   if (toolName === 'get_pubkey') {
-    return { pubkey: process.env.AGENT_PUBKEY };
+    return { pubkey: workerPubkey };
   }
 
   if (toolName === 'generate_idempotency_key') {
@@ -319,7 +318,7 @@ async function callMcpTool(toolName, toolArgs) {
 
   if (toolName === 'get_mode') {
     return {
-      mode: process.env.MODE || 'claude-api',
+      mode: process.env.MODE || 'openai-api',
       oracleUrl: process.env.AGENTLINK_ORACLE_URL || 'http://localhost:3000',
       deliveryUrl: process.env.AGENTLINK_DELIVERY_URL || 'http://localhost:8000',
     };
@@ -338,6 +337,7 @@ async function callMcpTool(toolName, toolArgs) {
     if (typeof incoming !== 'object' || incoming === null) {
       return { ok: false, error: 'Invalid state: must be an object' };
     }
+    // Merge with existing state to prevent model from dropping required fields
     let existing = {};
     try { existing = JSON.parse(fs.readFileSync(STATE_PATH, 'utf8')); } catch {}
     const merged = {
@@ -355,7 +355,9 @@ async function callMcpTool(toolName, toolArgs) {
     const { url, params } = toolArgs;
     const fullUrl = new URL(url);
     if (params) {
-      for (const [k, v] of Object.entries(params)) fullUrl.searchParams.set(k, v);
+      for (const [k, v] of Object.entries(params)) {
+        fullUrl.searchParams.set(k, v);
+      }
     }
     return new Promise((resolve) => {
       const lib = fullUrl.protocol === 'https:' ? https : http;
@@ -373,9 +375,8 @@ async function callMcpTool(toolName, toolArgs) {
   if (toolName === 'http_post') {
     const https = require('node:https');
     const http = require('node:http');
-    const { v4: uuidv4 } = require('uuid');
     const { url, body, headers = {} } = toolArgs;
-    log('info', `http_post → ${url}`);
+    const { v4: uuidv4 } = require('uuid');
     const payload = JSON.stringify(body);
     const parsed = new URL(url);
     const options = {
@@ -406,190 +407,242 @@ async function callMcpTool(toolName, toolArgs) {
     });
   }
 
-  throw new Error(`Unknown MCP tool: ${toolName}`);
+  throw new Error(`Unknown tool: ${toolName}`);
 }
 
-async function runConversation(anthropic, systemPrompt, initialMessage, maxTurns) {
-  const messages = [{ role: 'user', content: initialMessage }];
-  const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
+async function runConversation(openai, systemPrompt, initialMessage, maxTurns) {
+  const model = process.env.OPENAI_MODEL || 'gpt-4o';
 
   const tools = [
     {
-      name: 'sign_bid',
-      description: 'Sign a bid request. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          jobId: { type: 'string', description: 'Job ID to bid on' },
-          amount: { type: 'number', description: 'Bid amount in SOL' }
-        },
-        required: ['jobId', 'amount']
-      }
-    },
-    {
-      name: 'sign_acknowledge_job',
-      description: 'Sign a job acknowledgment. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          jobId: { type: 'string', description: 'Job ID to acknowledge' }
-        },
-        required: ['jobId']
-      }
-    },
-    {
-      name: 'sign_execution_event',
-      description: 'Sign an execution event. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          jobId: { type: 'string', description: 'Job ID' },
-          runId: { type: 'string', description: 'Run ID (e.g. run-{first8charsOfJobId})' },
-          state: { type: 'string', enum: ['STARTED', 'PROGRESS', 'SUCCEEDED'], description: 'Execution state' }
-        },
-        required: ['jobId', 'runId', 'state']
-      }
-    },
-    {
-      name: 'sign_deliver',
-      description: 'Sign a delivery. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          jobId: { type: 'string', description: 'Job ID' },
-          url: { type: 'string', description: 'Delivery URL (GitHub repo or hosted URL)' }
-        },
-        required: ['jobId', 'url']
-      }
-    },
-    {
-      name: 'sign_request_delivery_repo',
-      description: 'Sign a delivery repo access request. Returns { signature, timestamp, nonce } to include in POST /v1/jobs/{jobId}/repo/worker-access body.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          jobId: { type: 'string', description: 'Job ID' }
-        },
-        required: ['jobId']
-      }
-    },
-    {
-      name: 'upload_to_repo',
-      description: 'Upload files to the delivery GitHub repo using the worker_url from repo/worker-access. Returns { repo_url, files_uploaded }.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          worker_url: { type: 'string', description: 'Authenticated git URL from repo/worker-access response (https://x-access-token:{token}@github.com/...)' },
-          files: {
-            type: 'array',
-            description: 'Files to upload',
-            items: {
-              type: 'object',
-              properties: {
-                path: { type: 'string', description: 'File path in repo (e.g. delivery.md)' },
-                content: { type: 'string', description: 'File content as plain text' }
-              },
-              required: ['path', 'content']
-            }
+      type: 'function',
+      function: {
+        name: 'sign_bid',
+        description: 'Sign a bid request. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
+        parameters: {
+          type: 'object',
+          properties: {
+            jobId: { type: 'string', description: 'Job ID to bid on' },
+            amount: { type: 'number', description: 'Bid amount in SOL' }
           },
-          commit_message: { type: 'string', description: 'Git commit message' }
-        },
-        required: ['worker_url', 'files']
+          required: ['jobId', 'amount']
+        }
       }
     },
     {
-      name: 'agent_done',
-      description: 'Call this ONLY when you have truly finished all work for this cycle: all IN_PROGRESS jobs are delivered, all BIDDING/DELIVERED jobs are checked, and no new jobs need action. Do NOT call this mid-task. Never call this while a job is still executing.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          reason: { type: 'string', description: 'Why the cycle is complete (e.g. "No jobs to execute", "All jobs delivered")' }
-        },
-        required: ['reason']
+      type: 'function',
+      function: {
+        name: 'sign_acknowledge_job',
+        description: 'Sign a job acknowledgment. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
+        parameters: {
+          type: 'object',
+          properties: {
+            jobId: { type: 'string', description: 'Job ID to acknowledge' }
+          },
+          required: ['jobId']
+        }
       }
     },
     {
-      name: 'write_delivery_file',
-      description: 'Write a file to the local deliveries/{jobId}/ folder. Call this for each file you want to deliver (the actual work, README, etc.).',
-      input_schema: {
-        type: 'object',
-        properties: {
-          jobId: { type: 'string', description: 'Job ID (valid UUID)' },
-          filename: { type: 'string', description: 'File name (e.g. post.md, README.md, result.txt)' },
-          content: { type: 'string', description: 'Full file content as plain text' }
-        },
-        required: ['jobId', 'filename', 'content']
+      type: 'function',
+      function: {
+        name: 'sign_execution_event',
+        description: 'Sign an execution event. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
+        parameters: {
+          type: 'object',
+          properties: {
+            jobId: { type: 'string', description: 'Job ID' },
+            runId: { type: 'string', description: 'Run ID (e.g. run-{first8charsOfJobId})' },
+            state: { type: 'string', enum: ['STARTED', 'PROGRESS', 'SUCCEEDED'], description: 'Execution state' }
+          },
+          required: ['jobId', 'runId', 'state']
+        }
       }
     },
     {
-      name: 'push_delivery_folder',
-      description: 'Push ALL files from deliveries/{jobId}/ to the GitHub delivery repo. Call write_delivery_file for every file first, then call this once to push everything.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          jobId: { type: 'string', description: 'Job ID (valid UUID)' },
-          worker_url: { type: 'string', description: 'Authenticated git URL from request-delivery-repo response' },
-          commit_message: { type: 'string', description: 'Git commit message' }
-        },
-        required: ['jobId', 'worker_url']
+      type: 'function',
+      function: {
+        name: 'sign_deliver',
+        description: 'Sign a delivery. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
+        parameters: {
+          type: 'object',
+          properties: {
+            jobId: { type: 'string', description: 'Job ID' },
+            url: { type: 'string', description: 'Delivery URL (GitHub repo or hosted URL)' }
+          },
+          required: ['jobId', 'url']
+        }
       }
     },
     {
-      name: 'get_pubkey',
-      description: 'Get agent public key (safe — public only)',
-      input_schema: { type: 'object', properties: {} }
-    },
-    {
-      name: 'generate_idempotency_key',
-      description: 'Generate a fresh UUID v4 idempotency key',
-      input_schema: { type: 'object', properties: {} }
-    },
-    {
-      name: 'get_mode',
-      description: 'Get current runtime mode, oracleUrl, and deliveryUrl',
-      input_schema: { type: 'object', properties: {} }
-    },
-    {
-      name: 'read_state',
-      description: 'Read the current state.json (in-progress jobs, last heartbeat, etc).',
-      input_schema: { type: 'object', properties: {} }
-    },
-    {
-      name: 'write_state',
-      description: 'Write updated state to state.json.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          state: { type: 'object', description: 'Full state object to persist' }
-        },
-        required: ['state']
+      type: 'function',
+      function: {
+        name: 'sign_request_delivery_repo',
+        description: 'Sign a delivery repo access request. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
+        parameters: {
+          type: 'object',
+          properties: {
+            jobId: { type: 'string', description: 'Job ID' }
+          },
+          required: ['jobId']
+        }
       }
     },
     {
-      name: 'http_get',
-      description: 'Make a GET request to the AgentLink Oracle API.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          url: { type: 'string' },
-          params: { type: 'object' }
-        },
-        required: ['url']
+      type: 'function',
+      function: {
+        name: 'upload_to_repo',
+        description: 'Upload files to the delivery GitHub repo using the worker_url from repo/worker-access. Returns { repo_url, files_uploaded }.',
+        parameters: {
+          type: 'object',
+          properties: {
+            worker_url: { type: 'string', description: 'Authenticated git URL from repo/worker-access response (https://x-access-token:{token}@github.com/...)' },
+            files: {
+              type: 'array',
+              description: 'Files to upload',
+              items: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string', description: 'File path in repo (e.g. delivery.md)' },
+                  content: { type: 'string', description: 'File content as plain text' }
+                },
+                required: ['path', 'content']
+              }
+            },
+            commit_message: { type: 'string', description: 'Git commit message' }
+          },
+          required: ['worker_url', 'files']
+        }
       }
     },
     {
-      name: 'http_post',
-      description: 'Make a POST request to the AgentLink Oracle API.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          url: { type: 'string' },
-          body: { type: 'object' },
-          headers: { type: 'object' }
-        },
-        required: ['url', 'body']
+      type: 'function',
+      function: {
+        name: 'write_delivery_file',
+        description: 'Write a file to the local deliveries/{jobId}/ folder. Call this for each file you want to deliver (the actual work, README, etc.).',
+        parameters: {
+          type: 'object',
+          properties: {
+            jobId: { type: 'string', description: 'Job ID (valid UUID)' },
+            filename: { type: 'string', description: 'File name (e.g. post.md, README.md, result.txt)' },
+            content: { type: 'string', description: 'Full file content as plain text' }
+          },
+          required: ['jobId', 'filename', 'content']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'agent_done',
+        description: 'Call this ONLY when you have truly finished all work for this cycle: all IN_PROGRESS jobs are delivered, all BIDDING/DELIVERED jobs are checked, and no new jobs need action. Do NOT call this mid-task. Never call this while a job is still executing.',
+        parameters: {
+          type: 'object',
+          properties: {
+            reason: { type: 'string', description: 'Why the cycle is complete (e.g. "No jobs to execute", "All jobs delivered")' }
+          },
+          required: ['reason']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'push_delivery_folder',
+        description: 'Push ALL files from deliveries/{jobId}/ to the GitHub delivery repo. Call write_delivery_file for every file first, then call this once to push everything.',
+        parameters: {
+          type: 'object',
+          properties: {
+            jobId: { type: 'string', description: 'Job ID (valid UUID)' },
+            worker_url: { type: 'string', description: 'Authenticated git URL from request-delivery-repo response' },
+            commit_message: { type: 'string', description: 'Git commit message' }
+          },
+          required: ['jobId', 'worker_url']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_pubkey',
+        description: 'Get the agent public key.',
+        parameters: { type: 'object', properties: {} }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'generate_idempotency_key',
+        description: 'Generate a fresh UUID v4 for Idempotency-Key header.',
+        parameters: { type: 'object', properties: {} }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_mode',
+        description: 'Get the current runtime mode, oracleUrl, and deliveryUrl.',
+        parameters: { type: 'object', properties: {} }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read_state',
+        description: 'Read the current state.json (in-progress jobs, last heartbeat, etc).',
+        parameters: { type: 'object', properties: {} }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'write_state',
+        description: 'Write updated state to state.json.',
+        parameters: {
+          type: 'object',
+          properties: {
+            state: { type: 'object', description: 'Full state object to persist' }
+          },
+          required: ['state']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'http_get',
+        description: 'Make a GET request to the AgentLink Oracle API.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'Full URL to request' },
+            params: { type: 'object', description: 'Optional query parameters' }
+          },
+          required: ['url']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'http_post',
+        description: 'Make a POST request to the AgentLink Oracle API.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'Full URL to request' },
+            body: { type: 'object', description: 'JSON body to send' },
+            headers: { type: 'object', description: 'Optional extra headers (e.g. Idempotency-Key)' }
+          },
+          required: ['url', 'body']
+        }
       }
     }
+  ];
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: initialMessage }
   ];
 
   let turns = 0;
@@ -598,16 +651,15 @@ async function runConversation(anthropic, systemPrompt, initialMessage, maxTurns
     turns++;
     let response;
 
-    // Retry logic for API errors
     let retries = 0;
     while (retries < 3) {
       try {
-        response = await anthropic.messages.create({
+        response = await openai.chat.completions.create({
           model,
           max_tokens: 8192,
-          system: systemPrompt,
           messages,
-          tools
+          tools,
+          tool_choice: 'auto'
         });
         break;
       } catch (err) {
@@ -627,75 +679,77 @@ async function runConversation(anthropic, systemPrompt, initialMessage, maxTurns
 
     if (!response) throw new Error('API call failed after retries');
 
-    // Process content blocks
-    const assistantContent = response.content;
-    messages.push({ role: 'assistant', content: assistantContent });
+    const choice = response.choices[0];
+    const message = choice.message;
 
-    const toolUseBlocks = assistantContent.filter((b) => b.type === 'tool_use');
+    messages.push(message);
+
+    // Print assistant text live
+    if (message.content) {
+      process.stdout.write(message.content + '\n');
+      fs.appendFileSync(LOG_PATH, message.content + '\n');
+    }
 
     // Check if agent_done was called
-    const agentDoneCall = toolUseBlocks.find(t => t.name === 'agent_done');
+    const agentDoneCall = message.tool_calls?.find(t => t.function.name === 'agent_done');
     if (agentDoneCall) {
       log('info', 'Assistant signaled completion');
       return { completed: true, messages, turns };
     }
 
-    // If end_turn with no tool calls, nudge model to continue or call agent_done
-    if (response.stop_reason === 'end_turn' || toolUseBlocks.length === 0) {
+    // If no tool calls at all, nudge model to continue or call agent_done
+    if (!message.tool_calls?.length) {
       log('info', 'No tool calls — nudging model to continue or call agent_done');
       messages.push({
         role: 'user',
-        content: [{ type: 'text', text: 'You output text but made no tool calls. If you have deliverable content to save, call write_delivery_file now and continue the job. If all tasks for this cycle are truly complete (nothing left to execute), call agent_done({ reason: "..." }).' }]
+        content: 'You output text but made no tool calls. If you have deliverable content to save, call write_delivery_file now and continue the job. If all tasks for this cycle are truly complete (nothing left to execute), call agent_done({ reason: "..." }).'
       });
       continue;
     }
 
-    // Execute tool calls and collect results
-    const toolResults = [];
-    for (const toolUse of toolUseBlocks) {
+    // Execute tool calls
+    for (const toolCall of message.tool_calls) {
       let result;
+      let args;
       try {
-        log('info', `Tool: ${toolUse.name}`);
-        result = await callMcpTool(toolUse.name, toolUse.input);
-        if (toolUse.name === 'http_post' || toolUse.name === 'http_get') {
-          log('info', `${toolUse.name} response: ${JSON.stringify(result).slice(0, 300)}`);
-        }
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: JSON.stringify(result)
-        });
+        args = JSON.parse(toolCall.function.arguments);
+        log('info', `Tool: ${toolCall.function.name}`);
+        result = await callTool(toolCall.function.name, args);
       } catch (err) {
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: `Error: ${err.message}`,
-          is_error: true
-        });
+        result = { error: err.message };
       }
-    }
 
-    messages.push({ role: 'user', content: toolResults });
+      const resultStr = JSON.stringify(result);
+      if (toolCall.function.name === 'http_post' || toolCall.function.name === 'http_get') {
+        const reqUrl = (args && args.url) || '';
+        const reqBody = args && args.body ? JSON.stringify(args.body).slice(0, 300) : '';
+        log('info', `${toolCall.function.name} ${reqUrl} body=${reqBody} → ${resultStr.slice(0, 300)}`);
+      }
+      messages.push({
+        role: 'tool',
+        tool_call_id: toolCall.id,
+        content: resultStr
+      });
+    }
   }
 
-  // Hit max turns
   log('warn', `Hit max turns (${maxTurns}) — saving checkpoint`);
   return { completed: false, messages, turns };
 }
 
 async function run() {
-  // ⚠️  API key used here only — NEVER passed to Claude
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey || apiKey.startsWith('sk-ant-your')) {
-    console.error('❌ ANTHROPIC_API_KEY not set or is placeholder in .env');
-    console.error('   Get your key from: console.anthropic.com/settings/keys');
-    console.error('   Set in .env: ANTHROPIC_API_KEY=sk-ant-...');
+  // ⚠️  API key used here only — NEVER passed to the model
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || apiKey.startsWith('sk-your')) {
+    console.error('❌ OPENAI_API_KEY not set or is placeholder in .env');
+    console.error('   Get your key from: platform.openai.com/api-keys');
+    console.error('   Set in .env: OPENAI_API_KEY=sk-...');
     process.exit(1);
   }
 
-  const { default: Anthropic } = require('@anthropic-ai/sdk');
+  const { default: OpenAI } = require('openai');
   // ⚠️  Key used to init client — NEVER appears in prompts or logs
-  const anthropic = new Anthropic({ apiKey });
+  const openai = new OpenAI({ apiKey });
 
   const maxTurns = parseInt(process.env.MAX_TURNS || '20', 10);
   const dailyBudget = parseInt(process.env.DAILY_TOKEN_BUDGET || '100000', 10);
@@ -712,13 +766,12 @@ async function run() {
     ? `${skillContent}\n\n---\n\n${agentSkillContent}\n\n---\n\n${myAgentContent}`
     : `${skillContent}\n\n---\n\n${agentSkillContent}`;
 
-  log('info', 'Starting API mode executor');
-  log('info', `Model: ${process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5'}`);
+  log('info', 'Starting OpenAI API mode executor');
+  log('info', `Model: ${process.env.OPENAI_MODEL || 'gpt-4o'}`);
 
   let state = readState();
   state = resetDailyTokensIfNeeded(state);
 
-  // Check daily token budget
   const budgetUsedPct = (state.tokenUsage.today / dailyBudget) * 100;
   if (budgetUsedPct >= 90) {
     log('warn', `Daily token budget reached (${budgetUsedPct.toFixed(1)}%) — resuming tomorrow`);
@@ -731,25 +784,20 @@ async function run() {
   const initialMessage = 'Begin your heartbeat cycle. Read state.json, check for in-progress jobs to resume, then poll for new jobs.';
 
   try {
-    const result = await runConversation(anthropic, systemPrompt, initialMessage, maxTurns);
+    const result = await runConversation(openai, systemPrompt, initialMessage, maxTurns);
 
     state = readState();
     state = resetDailyTokensIfNeeded(state);
     state.lastHeartbeat = Date.now();
 
     log('info', `Run complete. Turns: ${result.turns}. Completed: ${result.completed}`);
-
     writeState(state);
 
   } catch (err) {
-    log('error', `API executor error: ${err.message}`);
+    log('error', `OpenAI executor error: ${err.message}`);
 
     state = readState();
     writeState(state);
-
-    if (err.status === 400 && err.message.includes('context')) {
-      log('warn', 'Context limit hit — conversation history may need summarization');
-    }
 
     return; // daemon will retry on next cycle; single-run mode exits naturally
   }

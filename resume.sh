@@ -38,24 +38,31 @@ set -a
 source <(grep -v '^#' "$ENV_FILE" | grep -v '^[[:space:]]*$')
 set +a
 
-MODE="${MODE:-subscription}"
+MODE="${MODE:-claude-subscription}"
 
 # ─── Validate based on MODE ─────────────────────────────
-if [ "$MODE" = "subscription" ]; then
+if [ "$MODE" = "claude-subscription" ]; then
   if ! command -v claude &>/dev/null; then
     log "ERROR: claude CLI not found. Install: npm install -g @anthropic-ai/claude-code"
     exit 1
   fi
-  log "INFO: Mode=subscription, claude CLI found"
-elif [ "$MODE" = "api" ]; then
+  log "INFO: Mode=claude-subscription, claude CLI found"
+elif [ "$MODE" = "claude-api" ]; then
   if [ -z "${ANTHROPIC_API_KEY:-}" ] || [[ "$ANTHROPIC_API_KEY" == sk-ant-your* ]]; then
     log "ERROR: ANTHROPIC_API_KEY not set or is placeholder in .env"
     log "ERROR: Get your key from: console.anthropic.com/settings/keys"
     exit 1
   fi
-  log "INFO: Mode=api, API key configured"
+  log "INFO: Mode=claude-api, Anthropic API key configured"
+elif [ "$MODE" = "openai-api" ]; then
+  if [ -z "${OPENAI_API_KEY:-}" ] || [[ "$OPENAI_API_KEY" == sk-your* ]]; then
+    log "ERROR: OPENAI_API_KEY not set or is placeholder in .env"
+    log "ERROR: Get your key from: platform.openai.com/api-keys"
+    exit 1
+  fi
+  log "INFO: Mode=openai-api, OpenAI API key configured"
 else
-  log "ERROR: Unknown MODE=$MODE. Must be 'subscription' or 'api'"
+  log "ERROR: Unknown MODE=$MODE. Must be: claude-subscription | claude-api | openai-api"
   exit 1
 fi
 

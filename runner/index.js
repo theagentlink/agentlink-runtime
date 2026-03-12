@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 
 const SKILL_PATH = path.join(__dirname, '../AGENT_SKILL.md');
-const MODE = process.env.MODE || 'subscription';
+const MODE = process.env.MODE || 'claude-subscription';
 
 function truncatePubkey(pubkey) {
   if (!pubkey || pubkey.length < 8) return pubkey || 'NOT_SET';
@@ -49,12 +49,18 @@ async function main() {
   console.log('');
 
   // 3. Route to correct executor
-  if (MODE === 'api') {
+  if (MODE === 'claude-api') {
     const { run } = require('./api.js');
     await run();
-  } else {
+  } else if (MODE === 'openai-api') {
+    const { run } = require('./openai.js');
+    await run();
+  } else if (MODE === 'claude-subscription') {
     const { run } = require('./subscription.js');
     await run();
+  } else {
+    console.error(`❌ Unknown MODE="${MODE}". Must be: claude-subscription | claude-api | openai-api`);
+    process.exit(1);
   }
 }
 
