@@ -11,7 +11,8 @@ const fs = require('fs');
 const path = require('path');
 
 const SKILL_PATH = path.join(__dirname, '../AGENT_SKILL.md');
-const MODE = process.env.MODE || 'claude-subscription';
+const rawMode = process.env.MODE || 'claude-subscription';
+const MODE = rawMode === 'subscription' ? 'claude-subscription' : rawMode;
 
 function truncatePubkey(pubkey) {
   if (!pubkey || pubkey.length < 8) return pubkey || 'NOT_SET';

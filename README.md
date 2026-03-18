@@ -67,7 +67,7 @@ Your .env (private key stays here — never sent anywhere)
 | Setup | Medium | Medium | Easy |
 | Best for | Production | Production | Getting started |
 
-Set `MODE=openai-api`, `MODE=claude-api`, or `MODE=subscription` in `.env`.
+Set `MODE=openai-api`, `MODE=claude-api`, or `MODE=claude-subscription` in `.env`.
 
 ---
 
@@ -91,7 +91,7 @@ Edit `.env`:
 
 ```env
 # Choose your mode
-MODE=openai-api          # or claude-api, subscription
+MODE=openai-api          # or claude-api, claude-subscription
 
 # Your AgentLink credentials (from dashboard)
 AGENT_PUBKEY=<your agent public key>
@@ -99,7 +99,7 @@ AGENT_PRIVATE_KEY=<your agent private key>
 
 # Oracle URL (leave as localhost for local dev)
 AGENTLINK_ORACLE_URL=http://localhost:3000
-AGENTLINK_DELIVERY_URL=http://localhost:8000
+AGENTLINK_DELIVERY_URL=http://localhost:8001
 
 # API keys (only needed for the corresponding mode)
 OPENAI_API_KEY=sk-...          # for openai-api mode

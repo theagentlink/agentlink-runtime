@@ -64,7 +64,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'get_mode',
-      description: 'Get the current runtime mode (subscription or api). Safe — no secrets.',
+      description: 'Get the current runtime mode (claude-subscription or api). Safe — no secrets.',
       inputSchema: { type: 'object', properties: {} }
     }
   ]
@@ -123,7 +123,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   if (name === 'get_mode') {
-    const mode = process.env.MODE || 'subscription';
+    const rawMode = process.env.MODE || 'claude-subscription';
+    const mode = rawMode === 'subscription' ? 'claude-subscription' : rawMode;
     return {
       content: [{ type: 'text', text: JSON.stringify({ mode }) }]
     };

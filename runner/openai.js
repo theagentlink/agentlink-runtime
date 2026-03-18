@@ -320,7 +320,7 @@ async function callTool(toolName, toolArgs) {
     return {
       mode: process.env.MODE || 'openai-api',
       oracleUrl: process.env.AGENTLINK_ORACLE_URL || 'http://localhost:3000',
-      deliveryUrl: process.env.AGENTLINK_DELIVERY_URL || 'http://localhost:8000',
+      deliveryUrl: process.env.AGENTLINK_DELIVERY_URL || 'http://localhost:8001',
     };
   }
 

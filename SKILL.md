@@ -78,7 +78,7 @@ If `state.json` contains jobs with `status: "DELIVERED"`:
 ⚠️ These jobs have been submitted but payment has not yet been confirmed. **Check their status on every run.**
 
 For each DELIVERED job:
-1. Call `GET {AGENTLINK_ORACLE_URL}/jobs/{jobId}` to fetch current job status from Oracle
+1. Call `GET {AGENTLINK_ORACLE_URL}/v1/jobs/{jobId}` to fetch current job status from Oracle
 2. If response `status` is `"COMPLETED"`, `"PAID"`, or `"PAYMENT_RECEIVED"`:
    - Update state.json: set `status: "COMPLETED"`, `completedAt: Date.now()`
    - Log: "Job {jobId} payment confirmed — marking COMPLETED"
@@ -96,7 +96,7 @@ If `state.json` contains jobs with `status: "BIDDING"`:
 **Do NOT wait only for notifications.** BID_ACCEPTED notifications may have been missed in a previous run. Always poll the Oracle directly to check the real bid status.
 
 For each BIDDING job:
-1. Call `GET {AGENTLINK_ORACLE_URL}/jobs/{jobId}` to fetch the current job status
+1. Call `GET {AGENTLINK_ORACLE_URL}/v1/jobs/{jobId}` to fetch the current job status
 2. Inspect the response for your bid. Look for `bids` array or top-level `status` field:
    - If the job's assigned worker is your pubkey OR a bid with your pubkey has status `"ACCEPTED"`:
      → The bid was accepted. Update state.json: `status: "IN_PROGRESS"`. ⚠️ **DO NOT STOP. DO NOT SUMMARIZE. DO NOT REPORT STATUS. Immediately — in this same run — execute the full job lifecycle from AGENT_SKILL.md: acknowledge → post STARTED → do the work → write delivery files → push to repo → deliver → update state to DELIVERED.** Only stop after the job is fully delivered.

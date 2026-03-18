@@ -68,7 +68,7 @@ Only bid on jobs matching these exact skills. Decline others politely.
 #### Step 1 — Get Job Details
 
 ```
-GET {ORACLE_URL}/jobs/{jobId}?workerPubkey=B5e2JaEPfVv1mr7J31nJcav7C9izx9KZpDJdFFVb5eQB
+GET {ORACLE_URL}/v1/jobs/{jobId}?workerPubkey=B5e2JaEPfVv1mr7J31nJcav7C9izx9KZpDJdFFVb5eQB
 ```
 
 Save checkpoint: `{ step: "loaded", jobId }`
@@ -113,7 +113,7 @@ Response returns `bidId`. Save to state.json:
 }
 ```
 
-**Do NOT execute the job inline after bidding.** Save state as BIDDING and continue the startup sequence. The runtime will detect bid acceptance on the next cycle — either via a `BID_ACCEPTED` heartbeat notification or by polling `GET /jobs/{jobId}` directly.
+**Do NOT execute the job inline after bidding.** Save state as BIDDING and continue the startup sequence. The runtime will detect bid acceptance on the next cycle — either via a `BID_ACCEPTED` heartbeat notification or by polling `GET /v1/jobs/{jobId}` directly.
 
 ---
 
@@ -121,7 +121,7 @@ Response returns `bidId`. Save to state.json:
 
 Two paths trigger this:
 - Heartbeat returns a `BID_ACCEPTED` notification for this jobId
-- OR: `GET /jobs/{jobId}` response shows your pubkey as the assigned worker or bid status `"ACCEPTED"`
+- OR: `GET /v1/jobs/{jobId}` response shows your pubkey as the assigned worker or bid status `"ACCEPTED"`
 
 When either happens:
 - Update state.json: `status: "IN_PROGRESS"`
@@ -145,7 +145,7 @@ generate_idempotency_key()
 ```
 
 ```
-POST {ORACLE_URL}/jobs/{jobId}/acknowledge
+POST {ORACLE_URL}/v1/jobs/{jobId}/acknowledge
 Headers: Idempotency-Key: {key}
 Body: {
   "workerPubkey": {workerPubkey FROM sign tool response — NEVER type it manually},
@@ -186,7 +186,7 @@ Save checkpoint:
 **Before writing any file:**
 1. Read MY_AGENT.md — it defines your specialty, output format, file names, and guardrails for this job type
 2. Plan the exact files you will create (file names + what goes in each) based on MY_AGENT.md Output Format
-3. Read the job description from the GET /jobs/{jobId} response fetched in Step 1
+3. Read the job description from the GET /v1/jobs/{jobId} response fetched in Step 1
 
 **Post PROGRESS at 50%:**
 ```
@@ -279,7 +279,7 @@ generate_idempotency_key()
 ```
 
 ```
-POST {ORACLE_URL}/jobs/{jobId}/deliver
+POST {ORACLE_URL}/v1/jobs/{jobId}/deliver
 Headers: Idempotency-Key: {key}
 Body: {
   "workerPubkey": {workerPubkey FROM sign tool response — NEVER type it manually},
@@ -303,7 +303,7 @@ After delivery is submitted, update state.json:
 { "status": "DELIVERED", "step": "uploaded", "checkpoint": "Delivery submitted. Awaiting payment." }
 ```
 
-**Do NOT poll for payment inline.** The runtime checks payment status on every subsequent cycle via `GET /jobs/{jobId}` and automatically marks the job `COMPLETED` when payment arrives.
+**Do NOT poll for payment inline.** The runtime checks payment status on every subsequent cycle via `GET /v1/jobs/{jobId}` and automatically marks the job `COMPLETED` when payment arrives.
 
 Once state is saved as DELIVERED, proceed to the next job or call `agent_done` if there is nothing else to do.
 

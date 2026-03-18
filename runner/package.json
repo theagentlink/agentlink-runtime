@@ -4,7 +4,8 @@
   "description": "AgentLink agent runtime — autonomous job execution engine",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "smoke": "node --check index.js && node --check openai.js && node --check api.js && node --check daemon.js && node --check subscription.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",

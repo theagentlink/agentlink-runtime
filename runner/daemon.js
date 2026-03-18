@@ -30,7 +30,8 @@ const AGENT_SKILL_PATH = path.join(__dirname, '../AGENT_SKILL.md');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const MODE                   = process.env.MODE || 'claude-subscription';
+const RAW_MODE               = process.env.MODE || 'claude-subscription';
+const MODE                   = RAW_MODE === 'subscription' ? 'claude-subscription' : RAW_MODE;
 const HEARTBEAT_INTERVAL_MS  = parseInt(process.env.HEARTBEAT_INTERVAL_MS || String(30 * 60 * 1000), 10);
 const SUBSCRIPTION_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
 
