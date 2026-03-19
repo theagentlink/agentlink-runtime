@@ -32,16 +32,100 @@ function getKeyPair() {
   return nacl.sign.keyPair.fromSecretKey(privateKeyBytes);
 }
 
+/**
+ * Core signing function — signs canonical fields and returns safe values only.
+ * Private key is used here and NEVER returned or logged.
+ */
+function signFields(fields) {
+  const timestamp = Date.now();
+  const nonce = uuidv4();
+
+  const parts = { ...fields, timestamp };
+  const canonical = Object.entries(parts)
+    .filter(([, value]) => value !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('|');
+
+  const keyPair = getKeyPair();
+  const messageBytes = Buffer.from(canonical, 'utf8');
+  const signatureBytes = nacl.sign.detached(messageBytes, keyPair.secretKey);
+  const signature = bs58.encode(signatureBytes);
+
+  return { signature, timestamp, nonce };
+}
+
 const server = new Server(
-  { name: 'agentlink-mcp-signer', version: '1.0.0' },
+  { name: 'agentlink-mcp-signer', version: '1.1.0' },
   { capabilities: { tools: {} } }
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
+    // ─── Action-specific signing tools ─────────────────────────────────
+    {
+      name: 'sign_bid',
+      description: 'Sign a bid request. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          jobId: { type: 'string', description: 'Job ID to bid on' },
+          amount: { type: 'number', description: 'Bid amount in SOL' }
+        },
+        required: ['jobId', 'amount']
+      }
+    },
+    {
+      name: 'sign_acknowledge_job',
+      description: 'Sign a job acknowledgment. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          jobId: { type: 'string', description: 'Job ID to acknowledge' }
+        },
+        required: ['jobId']
+      }
+    },
+    {
+      name: 'sign_execution_event',
+      description: 'Sign an execution event. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          jobId: { type: 'string', description: 'Job ID' },
+          runId: { type: 'string', description: 'Run ID (e.g. run-{first8charsOfJobId})' },
+          state: { type: 'string', enum: ['STARTED', 'PROGRESS', 'SUCCEEDED', 'FAILED'], description: 'Execution state' }
+        },
+        required: ['jobId', 'runId', 'state']
+      }
+    },
+    {
+      name: 'sign_deliver',
+      description: 'Sign a delivery. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          jobId: { type: 'string', description: 'Job ID' },
+          url: { type: 'string', description: 'Delivery URL (GitHub repo or hosted URL)' }
+        },
+        required: ['jobId', 'url']
+      }
+    },
+    {
+      name: 'sign_request_delivery_repo',
+      description: 'Sign a delivery repo access request. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          jobId: { type: 'string', description: 'Job ID' }
+        },
+        required: ['jobId']
+      }
+    },
+    // ─── Legacy generic signing tool (kept for backward compatibility) ──
     {
       name: 'sign_request',
-      description: 'Sign an AgentLink API request. Returns signature, timestamp, nonce only. Private key never exposed.',
+      description: 'Generic sign tool (prefer action-specific tools above). Returns signature, timestamp, nonce only. Private key never exposed.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -52,6 +136,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['action', 'pubkey', 'body']
       }
     },
+    // ─── Utility tools ─────────────────────────────────────────────────
     {
       name: 'get_pubkey',
       description: 'Get the agent public key. Safe — returns public key only.',
@@ -64,7 +149,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'get_mode',
-      description: 'Get the current runtime mode (claude-subscription or api). Safe — no secrets.',
+      description: 'Get the current runtime mode, oracleUrl, and deliveryUrl.',
       inputSchema: { type: 'object', properties: {} }
     }
   ]
@@ -72,47 +157,68 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  const workerPubkey = process.env.AGENT_PUBKEY;
 
-  if (name === 'sign_request') {
-    const { action, pubkey, body } = args;
+  // ─── Action-specific signing tools ───────────────────────────────────
 
-    const timestamp = Date.now().toString();
-    const nonce = uuidv4();
-
-    // Build canonical message using oracle-compatible sorted-parts format — NEVER log this
-    // Oracle verifySignedAction uses: buildMessage({ action, ...parts, timestamp })
-    // which sorts keys alphabetically and joins as key=value|key=value
-    const parts = { action, ...body, timestamp };
-    const canonical = Object.entries(parts)
-      .filter(([, value]) => value !== undefined)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, value]) => `${key}=${value}`)
-      .join('|');
-
-    // Sign — private key used here and NEVER returned
-    const keyPair = getKeyPair();
-    const messageBytes = Buffer.from(canonical, 'utf8');
-    const signatureBytes = nacl.sign.detached(messageBytes, keyPair.secretKey);
-    const signature = bs58.encode(signatureBytes);
-
-    // Return ONLY the safe values
+  if (name === 'sign_bid') {
+    const { jobId, amount } = args;
+    const result = signFields({ action: 'bid', worker: workerPubkey, jobId, amount: Number(amount) });
     return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({ signature, timestamp, nonce })
-        }
-      ]
+      content: [{ type: 'text', text: JSON.stringify({ ...result, workerPubkey }) }]
     };
   }
 
+  if (name === 'sign_acknowledge_job') {
+    const { jobId } = args;
+    const result = signFields({ action: 'acknowledge_job', worker: workerPubkey, jobId });
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ ...result, workerPubkey }) }]
+    };
+  }
+
+  if (name === 'sign_execution_event') {
+    const { jobId, runId, state } = args;
+    const result = signFields({ action: 'execution_event', worker: workerPubkey, jobId, runId, state });
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ ...result, workerPubkey }) }]
+    };
+  }
+
+  if (name === 'sign_deliver') {
+    const { jobId, url } = args;
+    const result = signFields({ action: 'deliver', worker: workerPubkey, jobId, url });
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ ...result, workerPubkey }) }]
+    };
+  }
+
+  if (name === 'sign_request_delivery_repo') {
+    const { jobId } = args;
+    const result = signFields({ action: 'request_delivery_repo', worker: workerPubkey, jobId });
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ ...result, workerPubkey }) }]
+    };
+  }
+
+  // ─── Legacy generic signing tool ─────────────────────────────────────
+
+  if (name === 'sign_request') {
+    const { action, body } = args;
+    const result = signFields({ action, ...body });
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result) }]
+    };
+  }
+
+  // ─── Utility tools ───────────────────────────────────────────────────
+
   if (name === 'get_pubkey') {
-    const pubkey = process.env.AGENT_PUBKEY;
-    if (!pubkey) {
+    if (!workerPubkey) {
       throw new Error('AGENT_PUBKEY not set in .env');
     }
     return {
-      content: [{ type: 'text', text: JSON.stringify({ pubkey }) }]
+      content: [{ type: 'text', text: JSON.stringify({ pubkey: workerPubkey }) }]
     };
   }
 
@@ -126,7 +232,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const rawMode = process.env.MODE || 'claude-subscription';
     const mode = rawMode === 'subscription' ? 'claude-subscription' : rawMode;
     return {
-      content: [{ type: 'text', text: JSON.stringify({ mode }) }]
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          mode,
+          oracleUrl: process.env.AGENTLINK_ORACLE_URL || 'http://localhost:3000',
+          deliveryUrl: process.env.AGENTLINK_DELIVERY_URL || 'http://localhost:8001',
+        })
+      }]
     };
   }
 

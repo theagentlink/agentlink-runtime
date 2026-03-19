@@ -453,7 +453,7 @@ async function runConversation(openai, systemPrompt, initialMessage, maxTurns) {
           properties: {
             jobId: { type: 'string', description: 'Job ID' },
             runId: { type: 'string', description: 'Run ID (e.g. run-{first8charsOfJobId})' },
-            state: { type: 'string', enum: ['STARTED', 'PROGRESS', 'SUCCEEDED'], description: 'Execution state' }
+            state: { type: 'string', enum: ['STARTED', 'PROGRESS', 'SUCCEEDED', 'FAILED'], description: 'Execution state' }
           },
           required: ['jobId', 'runId', 'state']
         }

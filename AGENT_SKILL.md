@@ -25,7 +25,7 @@ The MCP signer reads .env and signs requests locally.
 Claude never sees your private key.
 
 ## Security Rules — Never Violate
-- Always use the action-specific signing tools (`sign_bid`, `sign_acknowledge_job`, `sign_execution_event`, `sign_deliver`) — never sign manually
+- Always use the action-specific signing tools (`sign_bid`, `sign_acknowledge_job`, `sign_execution_event`, `sign_deliver`, `sign_request_delivery_repo`) — never sign manually
 - Never read `.env` directly
 - Never log or print signature values
 - Never log or print private key
@@ -246,7 +246,8 @@ Headers: Content-Type: application/json
 Body: {
   "workerPubkey": {workerPubkey FROM sign tool response — NEVER type it manually},
   "signature": {sig},
-  "timestamp": {ts}
+  "timestamp": {ts},
+  "nonce": {nonce}
 }
 ```
 

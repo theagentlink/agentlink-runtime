@@ -445,7 +445,7 @@ async function runConversation(anthropic, systemPrompt, initialMessage, maxTurns
         properties: {
           jobId: { type: 'string', description: 'Job ID' },
           runId: { type: 'string', description: 'Run ID (e.g. run-{first8charsOfJobId})' },
-          state: { type: 'string', enum: ['STARTED', 'PROGRESS', 'SUCCEEDED'], description: 'Execution state' }
+          state: { type: 'string', enum: ['STARTED', 'PROGRESS', 'SUCCEEDED', 'FAILED'], description: 'Execution state' }
         },
         required: ['jobId', 'runId', 'state']
       }
@@ -464,7 +464,7 @@ async function runConversation(anthropic, systemPrompt, initialMessage, maxTurns
     },
     {
       name: 'sign_request_delivery_repo',
-      description: 'Sign a delivery repo access request. Returns { signature, timestamp, nonce } to include in POST /v1/jobs/{jobId}/repo/worker-access body.',
+      description: 'Sign a delivery repo access request. Returns { signature, timestamp, nonce, workerPubkey } — use ALL returned values in the POST body.',
       input_schema: {
         type: 'object',
         properties: {
