@@ -91,6 +91,7 @@ function run() {
       'claude',
       [
         '--print',
+        '--verbose',
         '--output-format', 'stream-json',
         '--include-partial-messages',
         '--dangerously-skip-permissions',
